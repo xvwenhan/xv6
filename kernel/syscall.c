@@ -104,6 +104,8 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
+extern uint64 sys_trace(void);//新添加
+extern uint64 sys_sysinfo(void);//新添加
 
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -127,20 +129,56 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_trace]   sys_trace,//新添加
+[SYS_sysinfo] sys_sysinfo,
 };
 
+// 在 syscall.c 文件的顶部或适当位置添加以下数组定义
+static char *syscallnames[] = {
+  [SYS_fork]    "fork",
+  [SYS_exit]    "exit",
+  [SYS_wait]    "wait",
+  [SYS_pipe]    "pipe",
+  [SYS_read]    "read",
+  [SYS_kill]    "kill",
+  [SYS_exec]    "exec",
+  [SYS_fstat]   "fstat",
+  [SYS_chdir]   "chdir",
+  [SYS_dup]     "dup",
+  [SYS_getpid]  "getpid",
+  [SYS_sbrk]    "sbrk",
+  [SYS_sleep]   "sleep",
+  [SYS_uptime]  "uptime",
+  [SYS_open]    "open",
+  [SYS_write]   "write",
+  [SYS_mknod]   "mknod",
+  [SYS_unlink]  "unlink",
+  [SYS_link]    "link",
+  [SYS_mkdir]   "mkdir",
+  [SYS_close]   "close",
+  //添加自写的其他系统调用名称
+  [SYS_trace]   "trace",
+  [SYS_sysinfo] "sysinfo",
+};
+
+//每当用户态的程序请求执行系统调用时，控制权会转移到内核态，syscall函数就被调用来解析并执行相应的系统调用。
 void
 syscall(void)
 {
   int num;
   struct proc *p = myproc();
 
-  num = p->trapframe->a7;
-  if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
-    p->trapframe->a0 = syscalls[num]();
+  num = p->trapframe->a7;//从trapframe结构体的a7寄存器中读取系统调用的编号
+  if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {//检查系统调用编号是否有效
+    p->trapframe->a0 = syscalls[num]();//syscalls[num]指向一个有效的系统调用处理函数,调用,并将结果存储回trapframe结构体的a0寄存器
+        if(p->trace_mask & (1 << num)) {//trace_mask>0需要被跟踪
+      printf("%d: syscall %s -> %d\n", p->pid, syscallnames[num], p->trapframe->a0);
+      //新添加：在此打印：进程标识符 系统调用函数名 系统调用返回值
+    }
   } else {
     printf("%d %s: unknown sys call %d\n",
             p->pid, p->name, num);
     p->trapframe->a0 = -1;
   }
 }
+

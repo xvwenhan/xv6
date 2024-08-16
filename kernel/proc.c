@@ -289,6 +289,9 @@ fork(void)
   }
   np->sz = p->sz;
 
+   //新添加：让子进程继承父进程的追踪掩码
+  np->trace_mask = p->trace_mask;
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -653,4 +656,21 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+
+// 统计当前活跃进程数
+int
+nproc(void)
+{
+  struct proc *p;//定义一个指向proc结构体的指针p，用于遍历进程数组
+  int count = 0;
+
+  for(p = proc; p < &proc[NPROC]; p++) {
+//proc是一个全局数组，其中每个元素都是一个struct proc类型，代表一个进程的控制块。
+//NPROC是预定义的常量，代表系统最多能支持的进程数量。
+    if(p->state != UNUSED)
+      count++;
+  }
+  return count;
 }
