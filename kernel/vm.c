@@ -6,6 +6,7 @@
 #include "defs.h"
 #include "fs.h"
 
+
 /*
  * the kernel's page table.
  */
@@ -85,16 +86,21 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
 
   for(int level = 2; level > 0; level--) {
     pte_t *pte = &pagetable[PX(level, va)];
+    //PX(level, va)：用于提取虚拟地址 va 中对应级别（level）的页表索引
     if(*pte & PTE_V) {
-      pagetable = (pagetable_t)PTE2PA(*pte);
+      //PTE_V表示页表条目是否有效
+      pagetable = (pagetable_t)PTE2PA(*pte);//找到上一级目录
+      //PTE2PA将 PTE 转换为物理地址
     } else {
       if(!alloc || (pagetable = (pde_t*)kalloc()) == 0)
         return 0;
-      memset(pagetable, 0, PGSIZE);
+      memset(pagetable, 0, PGSIZE);//清空新建的页
       *pte = PA2PTE(pagetable) | PTE_V;
+      ////PA2PTE 将物理地址转换为PTE
+      //按位或运算符 | :结果是一个包含了物理地址和有效位标志的新页表条目值
     }
   }
-  return &pagetable[PX(0, va)];
+  return &pagetable[PX(0, va)];//最终函数返回第一级页表中对应 va 的 PTE 地址
 }
 
 // Look up a virtual address, return the physical address,
@@ -432,3 +438,27 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+
+/////////////////////////////////////
+static void
+printpte(pagetable_t pagetable, uint64 va, int depth)
+{
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i];
+    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+      // this PTE points to a lower-level page table.
+      uint64 child = PTE2PA(pte);
+      printpte((pagetable_t)child, va + (i << PGSHIFT), depth + 1);
+    } else if(pte & PTE_V){
+      printf("%*s..%d: pte %p pa %p\n", depth * 2, "", i, pte, PTE2PA(pte));
+    }
+  }
+}
+void
+vmprint(pagetable_t pagetable)
+{
+  printf("page table %p\n", pagetable);//输出页表的起始地址
+  printpte(pagetable, 0, 0);//调用 printpte 函数来打印页表的具体内容
+}
+

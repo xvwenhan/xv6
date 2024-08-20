@@ -9,6 +9,10 @@ struct sleeplock;
 struct stat;
 struct superblock;
 
+//新增加
+void vmprint(pagetable_t pagetable);
+pte_t *walk(pagetable_t pagetable, uint64 va, int alloc);//新增声明
+
 // bio.c
 void            binit(void);
 struct buf*     bread(uint, uint);

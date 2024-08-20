@@ -105,5 +105,6 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-  int trace_mask;//新添加一个成员
+
+  struct usyscall *usyscallpage;//新增加：指针指向新增的共享页面
 };

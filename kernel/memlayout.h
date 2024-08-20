@@ -18,12 +18,22 @@
 // PHYSTOP -- end RAM used by the kernel
 
 // qemu puts UART registers here in physical memory.
+struct usyscall {
+  int pid;
+};//新添加，记录进程pid
+
+//#define USYSCALL 0x7ffffff000 //定义虚拟地址（虚地址每个进程独立）。用于映射到用户空间的特定内存区域
+
 #define UART0 0x10000000L
 #define UART0_IRQ 10
 
 // virtio mmio interface
 #define VIRTIO0 0x10001000
 #define VIRTIO0_IRQ 1
+
+#ifdef LAB_NET
+#define E1000_IRQ 33
+#endif
 
 // core local interruptor (CLINT), which contains the timer.
 #define CLINT 0x2000000L
@@ -53,7 +63,7 @@
 
 // map kernel stacks beneath the trampoline,
 // each surrounded by invalid guard pages.
-#define KSTACK(p) (TRAMPOLINE - ((p)+1)* 2*PGSIZE)
+#define KSTACK(p) (TRAMPOLINE - (p)*2*PGSIZE - 3*PGSIZE)
 
 // User memory layout.
 // Address zero first:
@@ -62,6 +72,11 @@
 //   fixed-size stack
 //   expandable heap
 //   ...
+//   USYSCALL (shared with kernel)
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
+#define USYSCALL (TRAPFRAME - PGSIZE)
+// #ifdef LAB_PGTBL
+// #define USYSCALL (TRAPFRAME - PGSIZE)
+// #endif

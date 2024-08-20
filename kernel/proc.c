@@ -105,7 +105,7 @@ static struct proc*
 allocproc(void)
 {
   struct proc *p;
-
+//循环查找未使用的进程结构(用到了进程锁)
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == UNUSED) {
@@ -117,31 +117,52 @@ allocproc(void)
   return 0;
 
 found:
-  p->pid = allocpid();
-  p->state = USED;
+  p->pid = allocpid();//为找到的进程结构分配一个 PID。
+  p->state = USED;//将进程状态设置为 USED
 
-  // Allocate a trapframe page.
+  //分配一个用于保存陷阱帧（trap frame）的页面
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
   }
 
-  // An empty user page table.
+  //为进程初始化一个页表，用于管理内存映射
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
   }
+  //设置新的上下文，准备从 forkret 函数返回到用户空间
+  memset(&p->context, 0, sizeof(p->context));//使用 memset 函数将 p->context 结构体的所有成员初始化为零
+  p->context.ra = (uint64)forkret;//ra是进程上下文中的返回地址寄存器（Return Address Register)
+  //forkret 是一个函数指针，指向进程从 fork 系统调用返回后应执行的第一个函数
+  p->context.sp = p->kstack + PGSIZE;//sp 是进程上下文中的栈顶指针（Stack Pointer）
+//kstack 是进程的内核栈基址,PGSIZE 是页面大小
 
-  // Set up new context to start executing at forkret,
-  // which returns to user space.
-  memset(&p->context, 0, sizeof(p->context));
-  p->context.ra = (uint64)forkret;
-  p->context.sp = p->kstack + PGSIZE;
+//新增加共享页面：
+  void *usyscall_page = kalloc();
+  if(usyscall_page == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  memset(usyscall_page, 0, PGSIZE);
+  p->usyscallpage = (struct usyscall *)usyscall_page;
+  p->usyscallpage->pid = p->pid; // 初始化 pid
+//在进程的页表中添加一个条目
+  if(mappages(p->pagetable, USYSCALL, PGSIZE, (uint64)usyscall_page, PTE_R | PTE_U) != 0){
+    //USYSCALL是一个虚拟地址，指示用户态系统调用页面的起始地址
+    //usyscall_page 是指向用户态系统调用页面的物理地址
+    // PTE_R | PTE_U是说表项PTE用户态可读
+    kfree(usyscall_page);
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
 
-  return p;
+  return p;//返回进程结构指针
 }
 
 // free a proc structure and the data hanging from it,
@@ -152,9 +173,13 @@ freeproc(struct proc *p)
 {
   if(p->trapframe)
     kfree((void*)p->trapframe);
-  p->trapframe = 0;
+  //以下新增加：
+  if(p->usyscallpage)
+    kfree((void *)p->usyscallpage);
   if(p->pagetable)
-    proc_freepagetable(p->pagetable, p->sz);
+    proc_freepagetable(p->pagetable, p->sz);//变一下位置
+  p->usyscallpage = 0;
+  p->trapframe = 0;
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -206,7 +231,9 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  uvmunmap(pagetable, USYSCALL, 1, 0);//新添加
   uvmfree(pagetable, sz);
+  
 }
 
 // a user program that calls exec("/init")
@@ -288,9 +315,6 @@ fork(void)
     return -1;
   }
   np->sz = p->sz;
-
-   //新添加：让子进程继承父进程的追踪掩码
-  np->trace_mask = p->trace_mask;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -656,21 +680,4 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
-}
-
-
-// 统计当前活跃进程数
-int
-nproc(void)
-{
-  struct proc *p;//定义一个指向proc结构体的指针p，用于遍历进程数组
-  int count = 0;
-
-  for(p = proc; p < &proc[NPROC]; p++) {
-//proc是一个全局数组，其中每个元素都是一个struct proc类型，代表一个进程的控制块。
-//NPROC是预定义的常量，代表系统最多能支持的进程数量。
-    if(p->state != UNUSED)
-      count++;
-  }
-  return count;
 }
