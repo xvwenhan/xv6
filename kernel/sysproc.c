@@ -6,9 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
-#include "sysinfo.h"
-uint64 freemem(void);  // 声明 freemem 函数
-int nproc(void);       // 声明 nproc 函数
+
 uint64
 sys_exit(void)
 {
@@ -64,6 +62,7 @@ sys_sleep(void)
     return -1;
   acquire(&tickslock);
   ticks0 = ticks;
+  backtrace(); // 调用 backtrace 打印调用栈
   while(ticks - ticks0 < n){
     if(myproc()->killed){
       release(&tickslock);
@@ -97,43 +96,44 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
-//下面都是新加入的
+
+
+/*sigreturn函数作用：将处理信号之前保存的状态恢复到寄存器中，以确保信号处理完成后，进程能够从中断点继续执行。
+sigreturn 系统调用会读取进程上下文中的寄存器状态，并恢复到这些寄存器中*/
 uint64
-sys_trace(void)
+sys_sigreturn(void)
 {
-  int mask;//使用mask接受整型参数
-  struct proc *p = myproc();
-  if(argint(0, &mask) < 0)//获取从用户空间获取传递给系统调用的整型参数
-    return -1;
-  p->trace_mask = mask;//这里trace_mask是新添加的一个成员
-  return 0;
+  struct proc* p = myproc();
+  p->handlering=0;
+  *p->trapframe = *p->alarm_trapframe;
+  return p->alarm_trapframe->a0;
+  //return 0;
 }
 
-// 实现 sys_sysinfo 函数
 uint64
-sys_sysinfo(void)
+sys_sigalarm(void)
 {
-  struct sysinfo info;
-  struct proc *p = myproc();//定义一个指向proc结构体的指针p，用于遍历进程数组
-  uint64 addr;
+  int ticks;
+  uint64 handler_addr;  // 用于存储 handler 的地址
+  struct proc *p = myproc();  // 获取当前进程的 proc 结构体指针
 
-  // 获取用户传入的地址参数
-  if(argaddr(0, &addr) < 0)
+      // 检查 trapframe 是否非空并有效
+    if (p->trapframe == 0) {
+        printf("Error: trapframe is NULL\n");
+        return -1;
+    }
+
+  if (argint(0, &ticks) < 0 || argaddr(1, &handler_addr) < 0)
     return -1;
-
-  // 获取系统信息
-  info.freemem = freemem();
-  info.nproc = nproc();
-
-  // 将 sysinfo 结构体从内核空间复制到用户空间
-  if(copyout(p->pagetable, addr, (char *)&info, sizeof(info)) < 0)
-  //copyout 函数用于将数据从内核空间复制到用户空间
-  //int copyout(pagetable_t pagetable, uint64 addr, char *src, uint64 len);
-  //pagetable：用户进程的页表，用于确定用户地址如何映射到物理内存。
-  //addr：用户空间中的地址，数据将被写入到这个地址。
-  //src：指向内核空间中待复制数据的指针。
-  //len：要复制的数据长度。
-    return -1;
-
+  // 如果 ticks 为 0，取消闹钟
+  if (ticks == 0) {
+    p->alarm_ticks = 0;
+    p->alarm_handler = 0;
+    return 0;
+  }
+  // 设置闹钟
+  p->alarm_ticks = ticks;
+  p->alarm_remaining = ticks;
+  p->alarm_handler = (void(*)())handler_addr;
   return 0;
 }

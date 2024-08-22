@@ -80,16 +80,3 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
-
-// 获取当前可用内存
-uint64
-freemem(void)
-{
-  struct run *r;//run结构体通常用于链表中的节点，这里用于遍历空闲内存链表。
-  uint64 free_mem = 0;
-  
-  for(r = kmem.freelist; r; r = r->next)
-    free_mem += PGSIZE;
-
-  return free_mem;
-}

@@ -119,6 +119,7 @@ panic(char *s)
 {
   pr.locking = 0;
   printf("panic: ");
+  backtrace();  // 在panic时打印调用栈
   printf(s);
   printf("\n");
   panicked = 1; // freeze uart output from other CPUs
@@ -131,4 +132,21 @@ printfinit(void)
 {
   initlock(&pr.lock, "pr");
   pr.locking = 1;
+}
+//新增加：
+void backtrace() {
+    uint64 fp = r_fp();  // 获取当前帧指针
+    //fp是当前栈帧的帧指针，它指向栈帧的顶部。在xv6中，栈是从高地址向低地址增长的
+    printf("backtrace:\n");
+    uint64 stack_bottom = PGROUNDDOWN(fp);  // 栈页面的起始地址
+    uint64 stack_top = PGROUNDUP(fp);       // 栈页面的下一个页的起始地址
+    while (fp != 0 && fp >= stack_bottom && fp < stack_top) {
+        uint64 ra = *(uint64 *)(fp - 8);  // 返回地址在帧指针偏移-8的位置
+        //fp - 8表示在当前栈帧顶部的地址减去8个字节，这通常是函数的返回地址所在的位置
+        //(uint64 *)类型转换：(fp - 8)现在被看作是一个指向uint64类型数据的指针
+        //最后，访问内存地址fp - 8处存储的值，并且假设该值是一个uint64类型的数据
+        printf("%p\n", ra);
+        // 获取上一个栈帧的帧指针
+        fp = *(uint64 *)(fp - 16);
+    }
 }

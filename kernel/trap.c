@@ -66,7 +66,16 @@ usertrap(void)
 
     syscall();
   } else if((which_dev = devintr()) != 0){
-    // ok
+    //新增加
+      if (which_dev == 2 && p->alarm_ticks > 0) {//which_dev: 表示中断设备的编号，2 通常表示定时器中断
+      p->alarm_remaining--;
+      if (p->alarm_remaining <= 0 &&!p->handlering) {// 触发报警
+          *p->alarm_trapframe = *p->trapframe; // 拷贝当前trapframe
+          p->handlering=1;
+          p->trapframe->epc = (uint64)p->alarm_handler;//将当前进程的 trapframe 中的 epc（程序计数器）设置为 alarm_handler 的地址
+          p->alarm_remaining = p->alarm_ticks;//重置
+      }
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

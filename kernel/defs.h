@@ -9,6 +9,10 @@ struct sleeplock;
 struct stat;
 struct superblock;
 
+// 新添加
+void backtrace();
+
+
 // bio.c
 void            binit(void);
 struct buf*     bread(uint, uint);

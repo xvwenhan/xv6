@@ -331,12 +331,30 @@ sfence_vma()
   asm volatile("sfence.vma zero, zero");
 }
 
+//新添加：获取寄存器 s0 的值，并将其返回
+//inline内联函数：表示编译器应该尝试将这个函数的调用替换为函数体本身，以减少函数调用的开销。
+static inline uint64 r_fp() {
+    uint64 x;
+    asm volatile("mv %0, s0" : "=r" (x));
+  //asm: 这是一个内联汇编语句
+  //volatile: 表示编译器不应该对该语句进行优化
+  //"mv %0, s0": 汇编指令，表示将寄存器 s0 的值移动到 %0 指定的位置,%0: 表示第一个输出操作数，即变量 x
+  //: "=r" (x): 输出约束符，表示 %0 应该被解释为一个寄存器，并且它的值将被保存到变量 x 中
+    return x;
+}
+
+
+
+
+
+
+
 
 #define PGSIZE 4096 // bytes per page
 #define PGSHIFT 12  // bits of offset within a page
 
-#define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
-#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
+#define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))//将大小sz向上取整到最近的页边界，确保sz足够大，可以容纳完整的页面大小。
+#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))//作用：将地址a向下取整到最近的页边界，即找到a所在页面的起始地址。
 
 #define PTE_V (1L << 0) // valid
 #define PTE_R (1L << 1)

@@ -105,5 +105,10 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-  int trace_mask;//新添加一个成员
+
+  int alarm_ticks;  // 时钟滴答间隔
+  void(*alarm_handler)();// 定时报警处理函数
+  int alarm_remaining;     // 剩余 ticks
+  struct trapframe *alarm_trapframe;  // handler 之前要保存现场/
+  int handlering;//判断目标函数是否正在执行
 };
