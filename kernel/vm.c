@@ -5,7 +5,9 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
-
+void incref(uint64 pa);
+void decref(uint64 pa);
+int chcref(uint64 pa);
 /*
  * the kernel's page table.
  */
@@ -146,8 +148,9 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   a = PGROUNDDOWN(va);
   last = PGROUNDDOWN(va + size - 1);
   for(;;){
-    if((pte = walk(pagetable, a, 1)) == 0)
+    if((pte = walk(pagetable, a, 1)) == 0){
       return -1;
+    }
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
@@ -297,35 +300,41 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
+
+//新的函数
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
-
   for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
+    if((pte = walk(old, i, 0)) == 0)//walk 函数查找旧进程页表中对应虚拟地址 i 的页表条目,返回指向页表条目的指针。
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
-    pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+    // 获取物理地址和页面标志
+    if((pa = PTE2PA(*pte)) == 0)
+      panic("uvmcopy: address should exist");
+    // 将页面映射到新进程中，并设置为只读
+    if(*pte & PTE_W){
+      *pte &= ~PTE_W;//父进程可写变只读
+      *pte |= PTE_COW;//用cow做标识
     }
+    flags = PTE_FLAGS(*pte);
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags )!= 0) {
+      //flags & ~PTE_W: 页面标志，去除写权限
+      //i: 当前处理的虚拟地址
+      uvmunmap(new, 0, i / PGSIZE, 1);//0: 映射撤销的起始虚拟地址。i / PGSIZE: 已经映射的页面数量。1: 表示撤销映射时应释放物理页面。
+      return -1;
+    }
+    // 增加页面引用计数
+    incref(pa);
   }
-  return 0;
 
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
+  return 0;
 }
+
 
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
@@ -343,17 +352,44 @@ uvmclear(pagetable_t pagetable, uint64 va)
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
+//先将用户空间的虚拟地址映射到物理地址
+//再将用户空间的数据复制到物理内存
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
+  //dstva: 目标虚拟地址，数据将被复制到的目的地
+  //char *src: 源数据的地址，来自内核空间
+  //uint64 len: 要复制的数据长度
   uint64 n, va0, pa0;
-
   while(len > 0){
-    va0 = PGROUNDDOWN(dstva);
-    pa0 = walkaddr(pagetable, va0);
+    va0 = PGROUNDDOWN(dstva);// 将虚拟地址 dstva 向下对齐到页面边界,以获取当前页面的起始地址 va0
+    pa0 = walkaddr(pagetable, va0);//pa0: 虚拟地址 va0 的物理地址
     if(pa0 == 0)
       return -1;
-    n = PGSIZE - (dstva - va0);
+    pte_t *pte = walk(pagetable, va0, 0);
+    uint64 pa = PTE2PA(*pte);
+    int flags = PTE_FLAGS(*pte);
+    if((*pte & PTE_COW) && (*pte & PTE_W) == 0){ // 检查是否为只读的COW页面
+    //若为COW页面，需要在内容被改变前将原页面数据保存到新的内存块里
+    if(chcref((uint64)pa ) > 1){
+      char *mem = kalloc();
+      if(mem == 0)
+        return -1;
+      memmove(mem, (char*)pa, PGSIZE);//将原页面的数据复制到新分配的内存块中
+      uvmunmap(pagetable, va0, 1, 1);  // 解除虚拟页和物理页的映射关系
+      flags &= ~PTE_COW;  // 清除页表项中的 COW 位。
+      flags |= PTE_W;  // 设置页表项中的 W 位。
+      if(mappages(pagetable, va0, PGSIZE, (uint64)mem, flags) != 0){// 建立新的虚拟页和物理页的映射关系。
+        kfree((void *)mem);
+        return -1;
+        }
+    }
+    else if(chcref((uint64) pa) == 1){
+    *pte |= PTE_W;
+    *pte &= ~PTE_COW;
+    }
+    }  
+    n = PGSIZE - (dstva - va0);//当前页面剩余的字节数 n
     if(n > len)
       n = len;
     memmove((void *)(pa0 + (dstva - va0)), src, n);
@@ -361,6 +397,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     len -= n;
     src += n;
     dstva = va0 + PGSIZE;
+    //只有该页面剩余字节数n不足以接收要复制的数据，才会新开一页
   }
   return 0;
 }

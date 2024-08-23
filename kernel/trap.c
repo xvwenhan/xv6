@@ -5,7 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
-
+pte_t * walk(pagetable_t pagetable, uint64 va, int alloc);
+void incref(uint64 pa);
+void decref(uint64 pa);
+int chcref(uint64 pa);
 struct spinlock tickslock;
 uint ticks;
 
@@ -49,8 +52,38 @@ usertrap(void)
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
-  if(r_scause() == 8){
+  if(r_scause() == 15){ // 页面错误
+    uint64 va = r_stval();//引发页面错误的虚拟地址
+      if(va >= MAXVA){
+        panic("usertrap: va too big");
+      }
+    pte_t *pte = walk(p->pagetable, va, 0);//查找虚拟地址 va 对应的页表条目
+    uint64 pa = PTE2PA(*pte);
+    int flags = PTE_FLAGS(*pte);
+    if(pte && (*pte & PTE_V) && ((*pte & PTE_COW)||(*pte & PTE_W) )){  //COW页面或者可写页面进入：
+    if(chcref(pa)>1){
+      char *mem = kalloc();
+      if(mem == 0){
+        printf("usertrap: out of memory\n");
+        myproc()->killed = 1;//标记当前进程为待终止状态
+      } else {
+        memmove(mem, (char*)pa, PGSIZE);
+        uvmunmap(p->pagetable, PGROUNDDOWN(va), 1, 1);  // 解除虚拟页和物理页的映射关系
+        flags &= ~PTE_COW;  // 清除页表项中的 COW 位。
+        flags |= PTE_W;  // 设置页表项中的 W 位。
+        if(mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)mem, flags) != 0){// 建立新的虚拟页和物理页的映射关系。
+          kfree((void *)mem);
+          exit(-1);
+        }
+      }
+    }
+    else if(chcref((uint64) pa) == 1){
+      *pte |= PTE_W;//引用个数为1，直接改成可写即可
+      *pte &= ~PTE_COW;
+    }
+    } 
+    }
+    else if(r_scause() == 8){
     // system call
 
     if(p->killed)
@@ -178,10 +211,8 @@ devintr()
 {
   uint64 scause = r_scause();
 
-  if((scause & 0x8000000000000000L) &&
-     (scause & 0xff) == 9){
+  if((scause & 0x8000000000000000L) &&(scause & 0xff) == 9){
     // this is a supervisor external interrupt, via PLIC.
-
     // irq indicates which device interrupted.
     int irq = plic_claim();
 
@@ -192,7 +223,6 @@ devintr()
     } else if(irq){
       printf("unexpected interrupt irq=%d\n", irq);
     }
-
     // the PLIC allows each device to raise at most one
     // interrupt at a time; tell the PLIC the device is
     // now allowed to interrupt again.
@@ -203,11 +233,9 @@ devintr()
   } else if(scause == 0x8000000000000001L){
     // software interrupt from a machine-mode timer interrupt,
     // forwarded by timervec in kernelvec.S.
-
     if(cpuid() == 0){
       clockintr();
     }
-    
     // acknowledge the software interrupt by clearing
     // the SSIP bit in sip.
     w_sip(r_sip() & ~2);
@@ -217,4 +245,5 @@ devintr()
     return 0;
   }
 }
+
 

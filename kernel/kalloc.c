@@ -8,6 +8,10 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+//新增加：
+#define MAX_PAGES (PHYSTOP / PGSIZE)
+static int page_ref[MAX_PAGES];//记录引用次数的数组
+struct spinlock page_ref_lock;//锁
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -27,7 +31,37 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&page_ref_lock, "ref_cnt");//新增加
+  memset(page_ref, 0, sizeof(page_ref));//新增加
   freerange(end, (void*)PHYSTOP);
+}
+
+// 增加引用计数
+void
+incref(uint64 pa)
+{
+  int index = (pa / PGSIZE);
+  acquire(&page_ref_lock);
+  page_ref[index]++;
+  release(&page_ref_lock);
+}
+
+// 减少引用计数
+void
+decref(uint64 pa)
+{
+  int index = (pa / PGSIZE);
+  acquire(&page_ref_lock);//获取锁,保证对 page_ref 数组的访问是原子的
+  --page_ref[index];
+  release(&page_ref_lock);
+}
+//查看引用次数
+int
+chcref(uint64 pa){
+  acquire(&page_ref_lock);
+  int index = (pa / PGSIZE);
+  release(&page_ref_lock);
+  return page_ref[index];
 }
 
 void
@@ -48,9 +82,13 @@ kfree(void *pa)
 {
   struct run *r;
 
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
-    panic("kfree");
-
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP){
+    panic("kfree");}
+  //新增加
+  if(chcref((uint64)pa) > 1){
+    decref((uint64)pa);
+    return;
+  }
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
@@ -72,24 +110,16 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r){
     kmem.freelist = r->next;
+    int index = ((uint64)r / PGSIZE);
+    acquire(&page_ref_lock);
+    page_ref[index]=1;//初始化为1
+    release(&page_ref_lock);
+  }
   release(&kmem.lock);
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
-}
-
-// 获取当前可用内存
-uint64
-freemem(void)
-{
-  struct run *r;//run结构体通常用于链表中的节点，这里用于遍历空闲内存链表。
-  uint64 free_mem = 0;
-  
-  for(r = kmem.freelist; r; r = r->next)
-    free_mem += PGSIZE;
-
-  return free_mem;
 }
