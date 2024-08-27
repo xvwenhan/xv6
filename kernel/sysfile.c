@@ -15,7 +15,8 @@
 #include "sleeplock.h"
 #include "file.h"
 #include "fcntl.h"
-
+#define MAX_SYMLINK_DEPTH 10 // 最大符号链接深度
+#define NSYMLINK 10
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -115,7 +116,7 @@ sys_fstat(void)
   return filestat(f, st);
 }
 
-// Create the path new as a link to the same inode as old.
+// // Create the path new as a link to the same inode as old.
 uint64
 sys_link(void)
 {
@@ -283,53 +284,81 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+
+
+
 uint64
 sys_open(void)
 {
+  //printf("进入open\n");//////////////////////////////////////////////////////////////
   char path[MAXPATH];
   int fd, omode;
   struct file *f;
   struct inode *ip;
   int n;
-
+  int symlink_depth = 0; // 符号链接深度计数器
+//path：文件或设备的路径。
+//omode：打开模式
   if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
     return -1;
 
   begin_op();
 
-  if(omode & O_CREATE){
+  if(omode & O_CREATE){//包含 O_CREATE 标志，则尝试创建一个新文件。
     ip = create(path, T_FILE, 0, 0);
     if(ip == 0){
       end_op();
       return -1;
     }
-  } else {
-    if((ip = namei(path)) == 0){
+  } else {//模式不包含 O_CREATE 标志，则尝试查找现有的文件或目录
+    while (1) {
+    //printf("symlink_depth=%d\n",symlink_depth);///////////////////////////////////////////////////////////////////
+    if ((ip = namei(path)) == 0) {
       end_op();
       return -1;
     }
     ilock(ip);
-    if(ip->type == T_DIR && omode != O_RDONLY){
+    if (ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0) {
+      if (++symlink_depth > MAX_SYMLINK_DEPTH) {
+        // 符号链接层数过多，可能存在循环
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      // 从符号链接中读取目标路径
+      if (readi(ip, 0, (uint64)path, 0, MAXPATH) < 0) {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      iunlockput(ip);
+      // 继续处理新的路径
+    } else {
+      // 如果是普通文件或符号链接的处理完毕，退出循环
+      break;
+    }
+  }//while循环结束
+  if(ip->type == T_DIR && omode != O_RDONLY){//找到的是目录，并且打开模式不是只读模式，则不允许打开
       iunlockput(ip);
       end_op();
       return -1;
     }
   }
-
+  //找到的是设备，并且设备的主设备号不在有效范围内
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
     return -1;
   }
 
-  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
+  if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){//分配一个文件结构体 file。分配一个文件描述符 fd
     if(f)
       fileclose(f);
     iunlockput(ip);
     end_op();
     return -1;
   }
-
+  //根据文件类型设置文件描述符
   if(ip->type == T_DEVICE){
     f->type = FD_DEVICE;
     f->major = ip->major;
@@ -342,14 +371,200 @@ sys_open(void)
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 
   if((omode & O_TRUNC) && ip->type == T_FILE){
-    itrunc(ip);
+    itrunc(ip);//截断文件（如果设置了 O_TRUNC 标志）
   }
 
-  iunlock(ip);
+  iunlock(ip);//解锁 inode
   end_op();
-
+  //printf("结束open\n");///////////////////////////////////////////////////////////////////
   return fd;
 }
+
+
+// ///////////////////////////////////////////以下自己的follow
+// // struct inode* follow_symlink(struct inode *ip) {
+// //     char path[MAXPATH];
+// //     int symlink_depth = 0;
+
+// //     while (ip->type == T_SYMLINK) {
+// //         if (++symlink_depth > MAX_SYMLINK_DEPTH) {
+// //             // 符号链接层数过多，可能存在循环
+// //             iunlockput(ip);
+// //             return 0;
+// //         }
+
+// //         // 从符号链接中读取目标路径
+// //         if (readi(ip, 0, (uint64)path, 0, MAXPATH) < 0) {
+// //             iunlockput(ip);
+// //             return 0;
+// //         }
+
+// //         iunlockput(ip);
+
+// //         // 解析符号链接目标路径对应的 inode
+// //         if ((ip = namei(path)) == 0) {
+// //             return 0;
+// //         }
+
+// //         ilock(ip);
+// //     }
+
+// //     return ip;  // 返回最终解析的 inode（非符号链接）
+// // }
+// static struct inode* 
+// follow_symlink(struct inode* ip) {
+//   uint inums[NSYMLINK];
+//   int i, j;
+//   char target[MAXPATH];
+
+//   for(i = 0; i < NSYMLINK; ++i) {
+//     inums[i] = ip->inum;
+//     // read the target path from symlink file
+//     if(readi(ip, 0, (uint64)target, 0, MAXPATH) <= 0) {
+//       iunlockput(ip);
+//       printf("open_symlink: open symlink failed\n");
+//       return 0;
+//     }
+//     iunlockput(ip);
+    
+//     // get the inode of target path 
+//     if((ip = namei(target)) == 0) {
+//       printf("open_symlink: path \"%s\" is not exist\n", target);
+//       return 0;
+//     }
+//     for(j = 0; j <= i; ++j) {
+//       if(ip->inum == inums[j]) {
+//         printf("open_symlink: links form a cycle\n");
+//         return 0;
+//       }
+//     }
+//     ilock(ip);
+//     if(ip->type != T_SYMLINK) {
+//       return ip;
+//     }
+//   }
+
+//   iunlockput(ip);
+//   printf("open_symlink: the depth of links reaches the limit\n");
+//   return 0;
+// }
+// uint64
+// sys_open(void)
+// {
+//   char path[MAXPATH];
+//   int fd, omode;
+//   struct file *f;
+//   struct inode *ip;
+//   int n;
+
+//   if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
+//     return -1;
+
+//   begin_op();
+
+//   if(omode & O_CREATE){
+//     ip = create(path, T_FILE, 0, 0);
+//     if(ip == 0){
+//       end_op();
+//       return -1;
+//     }
+//   } else {
+//     if((ip = namei(path)) == 0){
+//       end_op();
+//       return -1;
+//     }
+//     ilock(ip);
+//     if(ip->type == T_DIR && omode != O_RDONLY){
+//       iunlockput(ip);
+//       end_op();
+//       return -1;
+//     }
+//   }
+
+//   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
+//     iunlockput(ip);
+//     end_op();
+//     return -1;
+//   }
+
+//   if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0) {
+//     if((ip = follow_symlink(ip)) == 0) {
+//       end_op();
+//       return -1;
+//     }
+//   }
+
+//   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
+//     if(f)
+//       fileclose(f);
+//     iunlockput(ip);
+//     end_op();
+//     return -1;
+//   }
+
+//   if(ip->type == T_DEVICE){
+//     f->type = FD_DEVICE;
+//     f->major = ip->major;
+//   } else {
+//     f->type = FD_INODE;
+//     f->off = 0;
+//   }
+//   f->ip = ip;
+//   f->readable = !(omode & O_WRONLY);
+//   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+
+//   if((omode & O_TRUNC) && ip->type == T_FILE){
+//     itrunc(ip);
+//   }
+
+//   iunlock(ip);
+//   end_op();
+
+//   return fd;
+// }
+
+
+// /////////////////////////////////////////////////////////
+
+// // static struct inode* 
+// // follow_symlink(struct inode* ip) {
+// //   uint inums[NSYMLINK];
+// //   int i, j;
+// //   char target[MAXPATH];
+
+// //   for(i = 0; i < NSYMLINK; ++i) {
+// //     inums[i] = ip->inum;
+// //     // read the target path from symlink file
+// //     if(readi(ip, 0, (uint64)target, 0, MAXPATH) <= 0) {
+// //       iunlockput(ip);
+// //       printf("open_symlink: open symlink failed\n");
+// //       return 0;
+// //     }
+// //     iunlockput(ip);
+    
+// //     // get the inode of target path 
+// //     if((ip = namei(target)) == 0) {
+// //       printf("open_symlink: path \"%s\" is not exist\n", target);
+// //       return 0;
+// //     }
+// //     for(j = 0; j <= i; ++j) {
+// //       if(ip->inum == inums[j]) {
+// //         printf("open_symlink: links form a cycle\n");
+// //         return 0;
+// //       }
+// //     }
+// //     ilock(ip);
+// //     if(ip->type != T_SYMLINK) {
+// //       return ip;
+// //     }
+// //   }
+
+// //   iunlockput(ip);
+// //   printf("open_symlink: the depth of links reaches the limit\n");
+// //   return 0;
+// // }
+
+
 
 uint64
 sys_mkdir(void)
@@ -448,7 +663,7 @@ sys_exec(void)
 
   return ret;
 
- bad:
+bad:
   for(i = 0; i < NELEM(argv) && argv[i] != 0; i++)
     kfree(argv[i]);
   return -1;
@@ -482,5 +697,32 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64 
+sys_symlink(void) {
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+  int n;
+  //target：符号链接的目标路径。
+  //path：符号链接的路径（包含文件名）
+  if ((n = argstr(0, target, MAXPATH)) < 0|| argstr(1, path, MAXPATH) < 0) {
+    return -1;
+  }
+  begin_op();//开始一个事务操作，确保一系列文件系统操作的原子性
+  if((ip = create(path, T_SYMLINK, 0, 0)) == 0) { // 创建一个符号链接文件
+    end_op();
+    return -1;
+  }
+    //将目标路径写入新创建的符号链接文件中
+  if(writei(ip, 0, (uint64)target, 0, n) != n) {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);//释放并解锁 inode 结构体
+  end_op();
   return 0;
 }

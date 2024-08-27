@@ -20,6 +20,4 @@
 #define SYS_link   19
 #define SYS_mkdir  20
 #define SYS_close  21
-// 为 trace 分配系统调用编号
-#define SYS_trace 22
-#define SYS_sysinfo 23
+#define SYS_symlink 22 
