@@ -65,3 +65,6 @@
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)
+#define MMAPEND TRAPFRAME
+//MMAPEND 定义了用户内存布局中可以进行内存映射的区域结束的位置。
+//它被设置为 TRAPFRAME，即内存映射区域的结束位置是在陷阱帧之前。

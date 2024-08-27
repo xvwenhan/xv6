@@ -36,6 +36,5 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
-# 添加 trace 系统调用的存根
-entry("trace");
-entry("sysinfo");
+entry("mmap");
+entry("munmap");

@@ -5,6 +5,11 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "fcntl.h"
+#include "spinlock.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -430,5 +435,38 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return 0;
   } else {
     return -1;
+  }
+}
+
+void
+vmaunmap(pagetable_t pagetable, uint64 va, uint64 nbytes, struct vma *v)
+{
+  uint64 a;
+  pte_t *pte;
+  //遍历从 va 开始，长度为 nbytes 的虚拟地址范围
+  for(a = va; a < va + nbytes; a += PGSIZE){
+    if((pte = walk(pagetable, a, 0)) == 0)//使用 walk 函数获取指定虚拟地址 a 对应的页表项 pte
+      continue;
+    if(PTE_FLAGS(*pte) == PTE_V)
+      panic("sys_munmap: not a leaf");//不是一个叶子节点
+    if(*pte & PTE_V){
+      uint64 pa = PTE2PA(*pte);//获取对应的物理地址 pa
+      if((*pte & PTE_D) && (v->flags & MAP_SHARED)) { //将脏页面写回文件
+        begin_op();
+        ilock(v->f->ip);
+        uint64 aoff = a - v->vastart; //计算虚拟地址相对于虚拟内存区域起始地址的偏移量 aoff
+        if(aoff < 0) { // 如果 aoff 小于 0，表示第一个页面不是完整的 4KB 页面
+          writei(v->f->ip, 0, pa + (-aoff), v->offset, PGSIZE + aoff);//writei 函数将物理内存中的内容写回文件
+        } else if(aoff + PGSIZE > v->sz){  // 如果 aoff + PGSIZE > v->sz，表示最后一个页面不是完整的 4KB 页面
+          writei(v->f->ip, 0, pa, v->offset + aoff, v->sz - aoff);//writei 函数将物理内存中的内容写回文件
+        } else { 
+          writei(v->f->ip, 0, pa, v->offset + aoff, PGSIZE);//writei 函数将物理内存中的内容写回文件
+        }
+        iunlock(v->f->ip);
+        end_op();
+      }
+      kfree((void*)pa);
+      *pte = 0;
+    }
   }
 }

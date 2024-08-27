@@ -68,9 +68,19 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    //当进程访问尚未分配的虚拟地址时，会产生页面错误(缺页)
+    //会分配物理内存，并将所需的数据从文件或其他存储介质加载到内存中
+    uint64 va = r_stval();
+    if((r_scause() == 13 || r_scause() == 15)){ 
+      if(!lazyallocate(va)) {//懒分配
+        printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+        printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      }
+    } else {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   }
 
   if(p->killed)

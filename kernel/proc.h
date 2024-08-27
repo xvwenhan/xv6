@@ -81,7 +81,16 @@ struct trapframe {
 };
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
-
+//新加入virtual memory address
+struct vma {
+  int valid;           // 是否有效
+  uint64 vastart;      // 虚拟内存区域的起始地址
+  uint64 sz;           // 虚拟内存区域的大小
+  struct file *f;      // 关联的文件（如果是基于文件的内存映射）
+  int prot;            // 保护标志
+  int flags;           // 其他标志
+  uint64 offset;       // 文件偏移量（如果是基于文件的内存映射）
+};
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -105,5 +114,5 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-  int trace_mask;//新添加一个成员
+  struct vma vmas[16];       //16个虚拟地址空槽
 };
